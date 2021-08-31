@@ -1,0 +1,148 @@
+---
+title: "bidenTM"
+output: html_document
+---
+```{r}
+library(dplyr)
+library(tm)
+library(parallel)
+library(wordcloud)
+library(syuzhet)
+library(ggplot2)
+library(stringr)
+```
+
+```{r}
+biden <- read.csv("hashtag_joebiden.csv")
+bidtwts <- biden %>% select(tweet)
+subset <- bidtwts[1:2000,]
+backup <- bidtwts
+```
+
+```{r}
+#FUNCTIONS------------------------
+amp <- function(cleaned){
+# Take out retweet header, there is only one
+  str_replace_all(cleaned,"RT @[a-z,A-Z]*: ","")
+# Get rid of hashtags
+  str_replace_all(cleaned,"#[a-z,A-Z]*","")
+# Get rid of references to other screennames
+  str_replace_all(cleaned,"@[a-z,A-Z]*","")
+# Get rid of URLs
+  gsub(" ?(f|ht)(tp)(s?)(://)(.*)[.|/]", "", cleaned)
+#get rid of unnecessary spaces
+  gsub(" [\n]", "", cleaned)
+  str_replace_all(cleaned," "," ")
+  gsub("&amp", "", cleaned)
+  gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", cleaned)
+  gsub("@\\w+", "", cleaned)
+  gsub("http\\w+", "", cleaned)
+}
+
+createcorpus <- function(tweets){
+  tweets <-  Corpus(VectorSource(tweets))
+}
+
+stopen <- function(corpused){
+  tm_map(corpused, removeWords, stopwords("english"))
+}
+
+toMatrix <- function(tdm){
+  tdm <- as.matrix(tdm)
+}
+```
+
+```{r}
+no_cores <- detectCores() - 1
+cl <- makeCluster(no_cores)
+```
+
+```{r}
+#           !!!REDACTED
+#clusterEvalQ(cl, library(stringr))
+#cleaned <- parLapply(cl, bidtwts, amp)
+
+clusterEvalQ(cl, library(tm))
+corpus1 <- parLapply(cl, bidtwts, createcorpus)
+#converting list to corpus 
+#corpus1 <- bidtwts %>% VectorSource %>% Corpus
+
+corpus_sub <- subset %>% VectorSource %>% Corpus
+```
+
+```{r}
+#sampletwts <- sample_n(bidtwts, 20000, replace=F)
+corpused <- tm_map(corpus1[[1]], content_transformer(tolower))
+corpused <- tm_map(corpused, removePunctuation)
+corpused <- tm_map(corpused, stripWhitespace)
+#corpused <- tm_map(corpused, removeWords, stopwords("en"))
+#christi <- tm_map(christi, content_transformer(webCh))
+
+#SKIPPED >>
+clusterEvalQ(cl, library(tm))
+corpuscomplete <- parLapply(cl, corpused, stopen)
+corpuscomplete <- parLapply(cl, corpused, tm_map(corpused, removeWords, stopwords("en")))
+```
+
+```{r}
+#bidtm <- TermDocumentMatrix(corpused)
+bidtm <- TermDocumentMatrix(corpus1[[1]])
+corpusMatrix <- parLapply(cl, bidtm, toMatrix)
+corpusMatrix <- as.matrix(bidtm)
+sortedMatrix <- sort(rowSums(corpusMatrix), decreasing=TRUE)
+bidf <- data.frame(word = names(sortedMatrix), freq = sortedMatrix)
+
+rmwords <- paste(c("trump", "biden", "joe", "donald", "harris", 
+                   "2020", "elections", "usa", "america", "president", 
+                   "election", "cnn", "amp", "que", "twitter"),collapse = "|")
+bidf <- bidf %>% filter(!grepl(rmwords, word))
+```
+
+```{r}
+library("Matrix")
+mat <- sparseMatrix(
+    i=tdm1$i,
+    j=tdm1$j,
+    x=tdm1$v,
+    dims=c(tdm1$nrow, tdm1$ncol))
+
+#check both are same
+mat[1,1:100]
+head(as.vector(tdm1[1,]), 100)
+```
+
+```{r}
+#---------------------------------------RESULTS----------
+#WORDCLOUD
+wordcloud(words=bidf$word, freq=bidf$freq, min.freq=5, max.words=50, 
+          random.order=FALSE, rot.per = 0.4, colors=brewer.pal(8, "Dark2"))
+
+#BARPLOT
+barplot(bidf[1:10,]$freq, names.arg = bidf[1:10,]$word, col ="lightgreen", 
+        main ="Top 5 most frequent words", ylab = "Word frequencies")
+
+```
+```{r}
+#EMOTION CLASSIFICATION
+tweetsch <- sapply(bidtwts, as.character)
+tweetsch <- as.character(tweetsch)
+nrc <- get_nrc_sentiment(tweetsch)
+head(nrc, 10)
+
+dfnrc <- data.frame(t(nrc))
+dim(dfnrc)
+dfnrc_new <- data.frame(rowSums(dfnrc))
+names(dfnrc_new)[1] <- "count"
+dfnrc_new <- cbind("sentiment" = rownames(dfnrc_new), dfnrc_new)
+rownames(dfnrc_new) <- NULL
+qplot(sentiment, data=dfnrc_new, weight=count, geom="bar", fill=sentiment, 
+      ylab="count") + ggtitle("Survey sentiments")
+
+barplot(
+  sort(colSums(prop.table(nrc))), 
+  horiz = TRUE, 
+  cex.names = 0.7, 
+  las = 1, 
+  main = "Emotions in Text", xlab="Percentage")
+
+```
